@@ -5,25 +5,8 @@
 #include <string.h>
 #include <stdint.h>
 
+#include "utils.h"
 #include "dynamic_array.h"
-
-// TODO: Remove this or add handle_error to a utils.h
-// void handle_error(const char* msg)
-// {
-//     fprintf(stdout, "%s: ", msg);
-//     fprintf(stdout, "%s\n", strerror(errno));
-//     exit(EXIT_FAILURE);
-// }
-
-struct darray
-{
-    void** items;          /**< Dynamic array items.                       */
-    Destructor destructor; /**< Dynamic array items' destructor.           */
-    size_t count;          /**< Current number of items.                   */
-    size_t capacity;       /**< Dynamic array current capacity.            */
-    size_t items_size;     /**< Size of each element in bytes.             */
-    bool is_pointer;       /**< If Dynamic array is working with pointers. */
-};
 
 darray_tt darray_create(Destructor items_destructor, size_t items_size, bool is_pointer)
 {
@@ -46,9 +29,7 @@ void darray_insert(darray_tt da, void* item)
     {
         da->capacity = (da->capacity == 0) ? INIT_CAP : da->capacity * 2;
         da->items = realloc(da->items, da->capacity * da->items_size);
-        // TODO: Remove this or add handle_error to a utils.h
-        // if ( da->items == NULL ) handle_error("ERROR: Unable to realloc.");
-        assert( da->items != NULL && "ERROR: Unable to realloc." );
+        if ( da->items == NULL ) handle_error("ERROR: Unable to realloc.");
     }
 
     // Converting to char* to make BYTE-wise operation, ensuring correct positioning of elements at darray->items
