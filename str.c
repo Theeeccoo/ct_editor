@@ -4,14 +4,8 @@
 #include <string.h>
 #include <errno.h>
 
+#include "utils.h"
 #include "str.h"
-
-void handle_error(const char* msg)
-{
-    fprintf(stdout, "%s: ", msg);
-    fprintf(stdout, "%s\n", strerror(errno));
-    exit(EXIT_FAILURE);
-}
 
 struct string
 {
@@ -24,18 +18,13 @@ string_tt string_create(const char* str)
     assert( str != NULL && "ERROR: Can not create empty String.\n");
 
     string_tt new_str = malloc(sizeof(struct string));
-    if ( new_str == NULL ) handle_error("ERROR - Unnable to malloc string");
+    if ( new_str == NULL ) handle_error("ERROR: Unnable to malloc string struct");
 
-    // TODO: check if STRfunctions are executed correctly
-
-    // Ensuring NULL termination
-    char aux_char[strlen(str) + 1];
-    strcpy(aux_char, str);
-    strcat(aux_char, "\0");
-
-    new_str->content_len = strlen(aux_char);
-    new_str->content = malloc(sizeof(char) * new_str->content_len);
-    strcpy(new_str->content, aux_char);
+    new_str->content = malloc(sizeof(char) * strlen(str) + 1);
+    if ( new_str->content == NULL ) handle_error("ERROR: Unnable to malloc string");
+    // TODO: check if strcpy is executed correctly
+    strcpy(new_str->content, str);
+    new_str->content_len = strlen(new_str->content);
 
     return new_str;
 }
@@ -53,5 +42,5 @@ void string_free(void* str)
 void string_print(const_string_tt str)
 {
     assert( str != NULL && "ERROR: Printing empty String\n");
-    printf("%s\n", str->content);
+    printf("%s", str->content);
 }
