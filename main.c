@@ -10,11 +10,16 @@
 #include "utils.h"
 #include "dynamic_array.h"
 
+#define BACKSPACE_KEY 127
+#define DEL_KEY       '~'
+#define ESCAPE_SEQ_INIT '\x1b'
+
 #define UNREACHABLE(message) do { fprintf(stderr, "%s:%d: UNREACHABLE: %s\n", __FILE__, __LINE__, message); abort(); } while(0)
 
 // GLOBAL VARIABLES
 typedef struct
 {
+    // TODO: Maybe an list would be better (for removal/insert) than darray
     darray_tt da;
     int cursorX;
     int cursorY;
@@ -26,6 +31,9 @@ typedef struct
 static Controller ct = {NULL, 0, 0, 0, 0, 0, 0};
 static struct termios original_termios;
 
+// -----------------------------------------------------
+// |                 TERMINAL SETTINGS                 |
+// -----------------------------------------------------
 void terminal_raw_mode(void)
 {
     struct termios settings;
@@ -36,7 +44,7 @@ void terminal_raw_mode(void)
 
     // ECHO - Prevents terminal from displaying what is typed
     // ICANON - Unbuffer input.
-    settings.c_lflag &= ~(ECHO | ICANON);
+    settings.c_lflag &= ~(ECHO | ICANON | ISIG);
     if ( (result = tcsetattr(STDIN_FILENO, TCSAFLUSH, &settings)) < 0 ) handle_error("ERROR: Failed to tcsetattr");
 }
 
@@ -47,6 +55,8 @@ void terminal_cooked_mode(void)
 
 void get_terminal_size(void)
 {
+    // FIX: When terminal is not fullscreen, it may occur some issues related the lines (terminal_size)
+    //                              ^- not in fullscreen and the zoom creates right-side scrollbar
     struct winsize ws;
     if ( ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == -1 ) handle_error("ERROR: Failed to ioctl");
 
@@ -54,6 +64,10 @@ void get_terminal_size(void)
     ct.screen_columns = ws.ws_col;
 }
 
+
+// -----------------------------------------------------
+// |                 TERMINAL DRAWING                  |
+// -----------------------------------------------------
 void draw_content(void)
 {
     printf("\x1b[H");
@@ -75,13 +89,54 @@ void reposition_cursor(void)
     fflush(stdout);
 }
 
-void redraw_screen(void)
+void redraw_whole_screen(void)
 {
     draw_content();
     reposition_cursor();
 }
 
-// TODO: make move_cursor scrollable
+void redraw_current_line(int line, int position_afterY, int position_afterX)
+{
+    printf("\x1b[%d;0H", ct.cursorY);
+    printf("\x1b[2K");
+    printf("\x1b[%d;0H", ct.cursorY);
+    string_print(ct.da->items[line + ct.offsetY]);
+    ct.cursorY = position_afterY;
+    ct.cursorX = position_afterX;
+    reposition_cursor();
+}
+
+
+// -----------------------------------------------------
+// |                     HANDLERS                      |
+// -----------------------------------------------------
+void handle_deletion(char read_char)
+{
+    int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
+    int curr_pointerX = (ct.cursorX > 0) ? ct.cursorX - 1 : 0;
+    if ( read_char == BACKSPACE_KEY )
+    {
+        string_delete_char_at(ct.da->items[curr_pointerY + ct.offsetY], curr_pointerX - 1);
+        redraw_current_line(curr_pointerY, curr_pointerY + 1, curr_pointerX);
+    }
+    else if ( read_char == DEL_KEY )
+    {
+        string_delete_char_at(ct.da->items[curr_pointerY + ct.offsetY], curr_pointerX);
+        redraw_current_line(curr_pointerY, curr_pointerY + 1, curr_pointerX + 1);
+    }
+}
+
+// TODO: Handle when trying to remove char[0].
+//       If line above, append content curr_line to live_above. Otherwise, don't do nothing
+void handle_typing(char read_char)
+{
+    int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
+    int curr_pointerX = (ct.cursorX > 0) ? ct.cursorX - 1 : 0;
+    string_append_char_at(ct.da->items[curr_pointerY + ct.offsetY], read_char, curr_pointerX);
+
+    redraw_current_line(curr_pointerY, curr_pointerY + 1, curr_pointerX + 2);
+}
+
 void handle_cursor(char read_arrow)
 {
     bool redraw = false;
@@ -90,6 +145,7 @@ void handle_cursor(char read_arrow)
     //       maybe there is a flag to be used at tcsetattr()
     // TODO: Finish SCROLL Left-Right -> Maybe word-wrap
     // TODO: Screen resize not being treated
+    // TODO: curses.h has soem definitions, like "KEY_DC" that might be helpfull
     switch ( read_arrow )
     {
         case 'A': // UP
@@ -102,7 +158,7 @@ void handle_cursor(char read_arrow)
             break;
         case 'B': // DOWN
 
-            // Preventing to go beyond the total number of strings (max_column)
+            // Preventing from go beyond the total number of lines
             if ( ct.cursorY < (int) (ct.da->count) )
             {
                 ct.cursorY++;
@@ -115,7 +171,7 @@ void handle_cursor(char read_arrow)
             break;
         case 'C': // RIGHT
 
-            // Preventing to go beyond the string content (max_column)
+            // Preventing from go beyond the string content (max_column)
             int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
             int max_column = (int) ((string_tt) ct.da->items[curr_pointerY + ct.offsetY])->content_len;
             if ( ct.cursorX < max_column )
@@ -128,32 +184,23 @@ void handle_cursor(char read_arrow)
             if ( ct.cursorX > 0 ) ct.cursorX--;
             else if ( ct.offsetX > 0 ) ct.offsetX--; // Scroll
             break;
+        case '3':
+            char seq;
+            if ( (read(STDIN_FILENO, &seq, 1) == 1) )
+            {
+                if ( seq == DEL_KEY ) handle_deletion(seq);
+                else UNREACHABLE("Arrows");
+            }
+            break;
         default: UNREACHABLE("Arrows");
     }
-    if ( redraw ) redraw_screen();
+    if ( redraw ) redraw_whole_screen();
     else reposition_cursor();
-}
-
-void handle_typing(char read_char)
-{
-    int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
-    int curr_pointerX = (ct.cursorX > 0) ? ct.cursorX - 1 : 0;
-    string_append(ct.da->items[curr_pointerY + ct.offsetY], read_char, curr_pointerX);
-
-    // Rewrite current line
-    printf("\x1b[%d;0H", ct.cursorY);
-    printf("\x1b[2K");
-    printf("\x1b[%d;0H", ct.cursorY);
-    string_print(ct.da->items[curr_pointerY + ct.offsetY]);
-
-    ct.cursorY = curr_pointerY + 1;
-    ct.cursorX = curr_pointerX + 2;
-    reposition_cursor();
 }
 
 bool handle_keyboard_input(char read_char)
 {
-    // TODO: Allow <ENTER> to create a newly complete line
+    // TODO: Allow <ENTER> to create a new line. If <ENTER> pressed in the middle of a line, the content AT cursor must be moved down
     switch ( read_char )
     {
         case 'a':
@@ -161,13 +208,18 @@ bool handle_keyboard_input(char read_char)
             printf("\x1b[2J");
             printf("Leaving...\n");
             return true;
-        case '\x1b':
+        case ESCAPE_SEQ_INIT:
             char seq[2];
             if ( (read(STDIN_FILENO, &seq[0], 1) == 1) &&
                  (read(STDIN_FILENO, &seq[1], 1) == 1)    )
             {
                 if ( seq[0] == '[' ) handle_cursor(seq[1]);
             }
+            break;
+            // Backspace
+            // TODO: Check for backspace's char, not it's ascii value
+        case BACKSPACE_KEY:
+            handle_deletion(read_char);
             break;
         default:
             handle_typing(read_char);
@@ -176,11 +228,15 @@ bool handle_keyboard_input(char read_char)
     return false;
 }
 
+
+// -----------------------------------------------------
+// |                       MAIN                        |
+// -----------------------------------------------------
 int main(int argc, char** argv)
 {
     if ( argc != 2 )
     {
-        printf("Usage: ./buid/main <file_name>\n");
+        printf("Usage: ./buid/main <file_path>\n");
         exit(EXIT_FAILURE);
     }
 
@@ -191,6 +247,7 @@ int main(int argc, char** argv)
     // Terminal info
     get_terminal_size();
 
+    // TODO: Ask to create file if not found
     FILE *fp = fopen(argv[1], "r");
     if ( fp == NULL ) handle_error("ERROR: Unnable to open file\n");
     char *line;
