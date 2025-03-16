@@ -12,7 +12,6 @@
 
 #define UNREACHABLE(message) do { fprintf(stderr, "%s:%d: UNREACHABLE: %s\n", __FILE__, __LINE__, message); abort(); } while(0)
 
-// TODO: Put this into an struct
 // GLOBAL VARIABLES
 typedef struct
 {
@@ -64,6 +63,7 @@ void draw_content(void)
     for ( int i = 0; i < num_show_lines; i++ )
     {
         printf("\x1b[K");
+        // TODO: Properly handle the lines id here
         // printf("%d: ", i + ct.offsetY);
         string_print(ct.da->items[i + ct.offsetY]);
     }
@@ -89,7 +89,6 @@ void handle_cursor(char read_arrow)
     // TODO: treat OTHER cases (shift-ARROWS, cntrl-ARROWS, alt-ARROWS ~ anything that might be combinable with ARROW-Keys)
     //       maybe there is a flag to be used at tcsetattr()
     // TODO: Finish SCROLL Left-Right -> Maybe word-wrap
-    // TODO: Prevent Right to go beyond line size
     // TODO: Screen resize not being treated
     switch ( read_arrow )
     {
@@ -102,6 +101,8 @@ void handle_cursor(char read_arrow)
             }
             break;
         case 'B': // DOWN
+
+            // Preventing to go beyond the total number of strings (max_column)
             if ( ct.cursorY < (int) (ct.da->count) )
             {
                 ct.cursorY++;
@@ -113,6 +114,8 @@ void handle_cursor(char read_arrow)
             }
             break;
         case 'C': // RIGHT
+
+            // Preventing to go beyond the string content (max_column)
             int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
             int max_column = (int) ((string_tt) ct.da->items[curr_pointerY + ct.offsetY])->content_len;
             if ( ct.cursorX < max_column )
@@ -150,7 +153,7 @@ void handle_typing(char read_char)
 
 bool handle_keyboard_input(char read_char)
 {
-    // TODO: put it into switch case to handle all
+    // TODO: Allow <ENTER> to create a newly complete line
     switch ( read_char )
     {
         case 'a':
@@ -173,8 +176,14 @@ bool handle_keyboard_input(char read_char)
     return false;
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
+    if ( argc != 2 )
+    {
+        printf("Usage: ./buid/main <file_name>\n");
+        exit(EXIT_FAILURE);
+    }
+
     ct.da = darray_create(string_free, sizeof(string_tt), true);
     terminal_raw_mode();
     atexit(terminal_cooked_mode);
@@ -182,14 +191,16 @@ int main(void)
     // Terminal info
     get_terminal_size();
 
-    // TODO: make file to be read at execution time
-    FILE *fp = fopen("str.c", "r");
+    FILE *fp = fopen(argv[1], "r");
+    if ( fp == NULL ) handle_error("ERROR: Unnable to open file\n");
     char *line;
     size_t len = 0;
     while ( (getline(&line, &len, fp)) != -1 )
     {
         if ( line != NULL ) darray_insert(ct.da, string_create(line));
     }
+    fclose(fp);
+
     draw_content();
     reposition_cursor();
 
@@ -198,8 +209,6 @@ int main(void)
     {
         if (handle_keyboard_input(read_char)) break;
     }
-
-
 
     darray_destroy(ct.da);
     return 0;
