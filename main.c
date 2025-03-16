@@ -25,13 +25,15 @@ typedef struct
     int screen_columns;
 } Controller;
 static Controller ct = {NULL, 0, 0, 0, 0, 0, 0};
+static struct termios original_termios;
 
 void terminal_raw_mode(void)
 {
     struct termios settings;
     int result;
-    if ( (result = tcgetattr(STDIN_FILENO, &settings)) < 0 ) handle_error("ERROR: Failed to tcgetattr");
+    if ( (result = tcgetattr(STDIN_FILENO, &original_termios)) < 0 ) handle_error("ERROR: Failed to tcgetattr");
 
+    settings = original_termios;
 
     // ECHO - Prevents terminal from displaying what is typed
     // ICANON - Unbuffer input.
@@ -41,12 +43,7 @@ void terminal_raw_mode(void)
 
 void terminal_cooked_mode(void)
 {
-    struct termios settings;
-    int result;
-    if ( (result = tcgetattr(STDIN_FILENO, &settings)) < 0 ) handle_error("ERROR: Failed to tcgetattr");
-
-    settings.c_lflag |= (ECHO | ICANON);
-    if ( (result = tcsetattr(STDIN_FILENO, TCSAFLUSH, &settings)) < 0 ) handle_error("ERROR: Failed to tcsetattr");
+    if ( tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_termios) < 0 ) handle_error("ERROR: Failed to tcsetattr");
 }
 
 void get_terminal_size(void)
@@ -60,9 +57,6 @@ void get_terminal_size(void)
 
 void draw_content(void)
 {
-    // TODO: curses.h has a database of terminals types and their escape sequences, might be better than this
-    // printf("\x1b[2J");
-
     printf("\x1b[H");
 
     int num_show_lines = ( ct.screen_rows > (int)(ct.da->count) ) ? (int)(ct.da->count): ct.screen_rows - 1;
@@ -70,16 +64,9 @@ void draw_content(void)
     for ( int i = 0; i < num_show_lines; i++ )
     {
         printf("\x1b[K");
-        printf("%d: ", i + ct.offsetY);
+        // printf("%d: ", i + ct.offsetY);
         string_print(ct.da->items[i + ct.offsetY]);
     }
-    //     if ( i < num_show_lines - i)
-    //         printf("\r\n");
-    // }
-    // for ( int i = num_show_lines; i < ct.screen_rows; i++ )
-    // {
-    //     printf("\x1b[K\r\n");
-    // }
 }
 
 void reposition_cursor(void)
@@ -95,13 +82,14 @@ void redraw_screen(void)
 }
 
 // TODO: make move_cursor scrollable
-void move_cursor(char read_arrow)
+void handle_cursor(char read_arrow)
 {
     bool redraw = false;
     // TODO: treat ESC case
     // TODO: treat OTHER cases (shift-ARROWS, cntrl-ARROWS, alt-ARROWS ~ anything that might be combinable with ARROW-Keys)
     //       maybe there is a flag to be used at tcsetattr()
-    // TODO: Finish SCROLL Left-Right
+    // TODO: Finish SCROLL Left-Right -> Maybe word-wrap
+    // TODO: Prevent Right to go beyond line size
     // TODO: Screen resize not being treated
     switch ( read_arrow )
     {
@@ -124,11 +112,16 @@ void move_cursor(char read_arrow)
                 }
             }
             break;
-        case 'C': // LEFT
-            ct.cursorX++;
-            if ( ct.cursorX >= ct.screen_columns + ct.offsetX ) ct.offsetX++; // Scroll
+        case 'C': // RIGHT
+            int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
+            int max_column = (int) ((string_tt) ct.da->items[curr_pointerY + ct.offsetY])->content_len;
+            if ( ct.cursorX < max_column )
+            {
+                ct.cursorX++;
+                if ( ct.cursorX >= ct.screen_columns + ct.offsetX ) ct.offsetX++; // Scroll
+            }
             break;
-        case 'D': // RIGHT
+        case 'D': // LEFT
             if ( ct.cursorX > 0 ) ct.cursorX--;
             else if ( ct.offsetX > 0 ) ct.offsetX--; // Scroll
             break;
@@ -138,13 +131,31 @@ void move_cursor(char read_arrow)
     else reposition_cursor();
 }
 
+void handle_typing(char read_char)
+{
+    int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
+    int curr_pointerX = (ct.cursorX > 0) ? ct.cursorX - 1 : 0;
+    string_append(ct.da->items[curr_pointerY + ct.offsetY], read_char, curr_pointerX);
+
+    // Rewrite current line
+    printf("\x1b[%d;0H", ct.cursorY);
+    printf("\x1b[2K");
+    printf("\x1b[%d;0H", ct.cursorY);
+    string_print(ct.da->items[curr_pointerY + ct.offsetY]);
+
+    ct.cursorY = curr_pointerY + 1;
+    ct.cursorX = curr_pointerX + 2;
+    reposition_cursor();
+}
+
 bool handle_keyboard_input(char read_char)
 {
     // TODO: put it into switch case to handle all
     switch ( read_char )
     {
         case 'a':
-            // TODO: clean screen and print leaving
+            // TODO: curses.h has a database of terminals types and their escape sequences, might be better than this
+            printf("\x1b[2J");
             printf("Leaving...\n");
             return true;
         case '\x1b':
@@ -152,22 +163,21 @@ bool handle_keyboard_input(char read_char)
             if ( (read(STDIN_FILENO, &seq[0], 1) == 1) &&
                  (read(STDIN_FILENO, &seq[1], 1) == 1)    )
             {
-                if ( seq[0] == '[' ) move_cursor(seq[1]);
+                if ( seq[0] == '[' ) handle_cursor(seq[1]);
             }
             break;
         default:
-            printf("%c\n", read_char);
+            handle_typing(read_char);
             break;
     }
     return false;
 }
 
-
-
 int main(void)
 {
     ct.da = darray_create(string_free, sizeof(string_tt), true);
     terminal_raw_mode();
+    atexit(terminal_cooked_mode);
 
     // Terminal info
     get_terminal_size();
@@ -189,7 +199,7 @@ int main(void)
         if (handle_keyboard_input(read_char)) break;
     }
 
-    terminal_cooked_mode();
+
 
     darray_destroy(ct.da);
     return 0;
