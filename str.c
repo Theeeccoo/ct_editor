@@ -31,7 +31,7 @@ void string_free(void* str)
     var->content = NULL;
     free(var);
     var = NULL;
-
+}
 
 string_tt string_content_from(string_tt str, int position)
 {
