@@ -33,11 +33,30 @@ void darray_insert(darray_tt da, void* item)
     }
 
     // Converting to char* to make BYTE-wise operation, ensuring correct positioning of elements at darray->items
-    void *target = (char *) da->items + (da->count++ * da->items_size);
+    void *target = (char *) da->items + (da->count * da->items_size);
 
     // If working with pointers, memcpy would copy pointer's address, causing SEGFAULT
     if ( da->is_pointer ) *(void**) target = item;
     else memcpy(target, item, da->items_size);
+    da->count++;
+}
+
+void darray_insert_at(darray_tt da, int position, void* item)
+{
+    if ( da->count >= da->capacity )
+    {
+        da->capacity = (da->capacity == 0) ? INIT_CAP : da->capacity * 2;
+        da->items = realloc(da->items, da->capacity * da->items_size);
+        if ( da->items == NULL ) handle_error("ERROR: Unable to realloc.");
+    }
+
+    void *target = (char *) da->items + (position * da->items_size);
+    assert( (memmove((char *) da->items + ((position + 1) * da->items_size), target, ((da->count - position + 1) * da->items_size))) != NULL );
+
+    // If working with pointers, memcpy would copy pointer's address, causing SEGFAULT
+    if ( da->is_pointer ) *(void**) target = item;
+    else memcpy(target, item, da->items_size);
+    da->count++;
 }
 
 void darray_destroy(darray_tt darray)

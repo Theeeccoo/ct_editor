@@ -12,6 +12,7 @@
 
 #define BACKSPACE_KEY 127
 #define DEL_KEY       '~'
+#define ENTER_KEY     '\n'
 #define ESCAPE_SEQ_INIT '\x1b'
 
 #define UNREACHABLE(message) do { fprintf(stderr, "%s:%d: UNREACHABLE: %s\n", __FILE__, __LINE__, message); abort(); } while(0)
@@ -55,6 +56,7 @@ void terminal_cooked_mode(void)
 
 void get_terminal_size(void)
 {
+    // TODO: Handle resize
     // FIX: When terminal is not fullscreen, it may occur some issues related the lines (terminal_size)
     //                              ^- not in fullscreen and the zoom creates right-side scrollbar
     struct winsize ws;
@@ -71,10 +73,10 @@ void get_terminal_size(void)
 void draw_content(void)
 {
     printf("\x1b[H");
+    int num_lines_print = ct.screen_rows - 1;
 
-    int num_show_lines = ( ct.screen_rows > (int)(ct.da->count) ) ? (int)(ct.da->count): ct.screen_rows - 1;
-
-    for ( int i = 0; i < num_show_lines; i++ )
+    // Change it to a while
+    for ( int i = 0; i < num_lines_print; i++ )
     {
         printf("\x1b[K");
         // TODO: Properly handle the lines id here
@@ -85,7 +87,16 @@ void draw_content(void)
 
 void reposition_cursor(void)
 {
-    printf("\x1b[%d;%dH", ct.cursorY, ct.cursorX);
+    int curr_pointerY = ct.cursorY + ct.offsetY;
+    if ( curr_pointerY < 0 ) curr_pointerY = 0;
+    else if ( curr_pointerY >= (int) ct.da->count ) curr_pointerY = (int)ct.da->count - 1;
+
+    int max_column = (int) ((string_tt) ct.da->items[curr_pointerY])->content_len;
+    int curr_pointerX = ct.cursorX + ct.offsetX;
+    if ( curr_pointerX < 0 ) curr_pointerX = 0;
+    else if ( curr_pointerX >= max_column ) curr_pointerX = max_column;
+
+    printf("\x1b[%d;%dH", ct.cursorY + 1, curr_pointerX + 1);
     fflush(stdout);
 }
 
@@ -97,10 +108,9 @@ void redraw_whole_screen(void)
 
 void redraw_current_line(int line, int position_afterY, int position_afterX)
 {
-    printf("\x1b[%d;0H", ct.cursorY);
+    printf("\x1b[%d;0H", ct.cursorY + 1);
     printf("\x1b[2K");
-    printf("\x1b[%d;0H", ct.cursorY);
-    string_print(ct.da->items[line + ct.offsetY]);
+    string_print(ct.da->items[line]);
     ct.cursorY = position_afterY;
     ct.cursorX = position_afterX;
     reposition_cursor();
@@ -110,74 +120,86 @@ void redraw_current_line(int line, int position_afterY, int position_afterX)
 // -----------------------------------------------------
 // |                     HANDLERS                      |
 // -----------------------------------------------------
+
+// TODO: Handle when trying to remove char[0].
+//       If line above, append content curr_line to live_above and remove curr_line.
 void handle_deletion(char read_char)
 {
-    int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
-    int curr_pointerX = (ct.cursorX > 0) ? ct.cursorX - 1 : 0;
+    int curr_pointerY = ct.cursorY + ct.offsetY;
+    int curr_pointerX = ct.cursorX + ct.offsetX;
     if ( read_char == BACKSPACE_KEY )
     {
-        string_delete_char_at(ct.da->items[curr_pointerY + ct.offsetY], curr_pointerX - 1);
-        redraw_current_line(curr_pointerY, curr_pointerY + 1, curr_pointerX);
+        string_delete_char_at(ct.da->items[curr_pointerY], curr_pointerX - 1);
+        redraw_current_line(curr_pointerY, ct.cursorY, ct.cursorX - 1);
     }
     else if ( read_char == DEL_KEY )
     {
-        string_delete_char_at(ct.da->items[curr_pointerY + ct.offsetY], curr_pointerX);
-        redraw_current_line(curr_pointerY, curr_pointerY + 1, curr_pointerX + 1);
+        string_delete_char_at(ct.da->items[curr_pointerY], curr_pointerX);
+        redraw_current_line(curr_pointerY, ct.cursorY, ct.cursorX);
     }
 }
 
-// TODO: Handle when trying to remove char[0].
-//       If line above, append content curr_line to live_above. Otherwise, don't do nothing
 void handle_typing(char read_char)
 {
-    int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
-    int curr_pointerX = (ct.cursorX > 0) ? ct.cursorX - 1 : 0;
-    string_append_char_at(ct.da->items[curr_pointerY + ct.offsetY], read_char, curr_pointerX);
+    int curr_pointerY = ct.cursorY + ct.offsetY;
+    int curr_pointerX = ct.cursorX + ct.offsetX;
+    string_append_char_at(ct.da->items[curr_pointerY], read_char, curr_pointerX);
 
-    redraw_current_line(curr_pointerY, curr_pointerY + 1, curr_pointerX + 2);
+    redraw_current_line(curr_pointerY, ct.cursorY, ct.cursorX + 1);
+}
+
+void handle_new_line(void)
+{
+    int curr_pointerY = ct.cursorY + ct.offsetY;
+    int curr_pointerX = ct.cursorX + ct.offsetX;
+    string_tt new_line = string_content_from(ct.da->items[curr_pointerY], curr_pointerX);
+    darray_insert_at(ct.da, (curr_pointerY + 1), new_line);
+    redraw_whole_screen();
 }
 
 void handle_cursor(char read_arrow)
 {
-    bool redraw = false;
+    bool redraw = 0;
     // TODO: treat ESC case
     // TODO: treat OTHER cases (shift-ARROWS, cntrl-ARROWS, alt-ARROWS ~ anything that might be combinable with ARROW-Keys)
     //       maybe there is a flag to be used at tcsetattr()
     // TODO: Finish SCROLL Left-Right -> Maybe word-wrap
     // TODO: Screen resize not being treated
     // TODO: curses.h has soem definitions, like "KEY_DC" that might be helpfull
+    // TODO: while moving throught the lines, the cursor must move horizontally aswell
     switch ( read_arrow )
     {
         case 'A': // UP
-            if ( ct.cursorY > 0 ) ct.cursorY--;
-            else if ( ct.offsetY > 0 )
+            int top_visible_line = ct.cursorY + ct.offsetY;
+            if ( top_visible_line > 0 )
             {
-                redraw = true;
-                ct.offsetY--; // Scroll
+                if ( ct.cursorY == 0 ) { redraw = true; ct.offsetY--; }
+                else if ( ct.offsetY > 0 ) ct.cursorY--;
+                else if ( ct.offsetY == 0 ) ct.cursorY--;
             }
             break;
         case 'B': // DOWN
+            int total_lines = ct.da->count;
+            int bottom_visible_line = ct.cursorY + ct.offsetY;
 
-            // Preventing from go beyond the total number of lines
-            if ( ct.cursorY < (int) (ct.da->count) )
+            if ( bottom_visible_line < total_lines )
             {
-                ct.cursorY++;
-                if ( ct.cursorY >= ct.screen_rows + ct.offsetY )
+                if ( ct.cursorY == ct.screen_rows - 1)
                 {
                     redraw = true;
-                    ct.offsetY++; // Scroll
-                }
+                    ct.offsetY++;
+                } else  ct.cursorY++;
             }
             break;
         case 'C': // RIGHT
 
             // Preventing from go beyond the string content (max_column)
-            int curr_pointerY = (ct.cursorY > 0) ? ct.cursorY - 1 : 0;
-            int max_column = (int) ((string_tt) ct.da->items[curr_pointerY + ct.offsetY])->content_len;
-            if ( ct.cursorX < max_column )
+            int curr_pointerY = ct.cursorY + ct.offsetY;
+            int max_column = (int) ((string_tt) ct.da->items[curr_pointerY])->content_len;
+            if ( (ct.cursorX + ct.offsetX) < max_column )
             {
                 ct.cursorX++;
-                if ( ct.cursorX >= ct.screen_columns + ct.offsetX ) ct.offsetX++; // Scroll
+                if ( ct.cursorX > ct.screen_columns ) ct.cursorX = max_column; // Scroll
             }
             break;
         case 'D': // LEFT
@@ -215,6 +237,9 @@ bool handle_keyboard_input(char read_char)
             {
                 if ( seq[0] == '[' ) handle_cursor(seq[1]);
             }
+            break;
+        case ENTER_KEY:
+            handle_new_line();
             break;
             // Backspace
             // TODO: Check for backspace's char, not it's ascii value
