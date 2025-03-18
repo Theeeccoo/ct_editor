@@ -62,6 +62,22 @@ void string_print(const_string_tt str)
     assert( str != NULL && "ERROR: Printing empty String\n");
     printf("%s", str->content);
 }
+
+void string_append_string(string_tt str, char* end_str)
+{
+    assert( str != NULL && "ERROR: Appending string into empty String\n");
+    assert( end_str != NULL && "ERROR: Appending empty string into String\n");
+
+    char* new_str = realloc(str->content, str->content_len + strlen(end_str) + 1);
+    if ( new_str == NULL ) handle_error("ERROR: Unnable to realloc string\n");
+    new_str[strlen(new_str) - 1] = '\0';
+    char* new_concat_str = strcat(new_str, end_str);
+    if ( new_concat_str == NULL ) handle_error("ERROR: Unnable to concatenate string\n");
+    printf("%s\n", end_str);
+    str->content = new_concat_str;
+    str->content_len += strlen(end_str) - 1;
+}
+
 void string_append_char_at(string_tt str, char new_c, int position)
 {
     assert( str != NULL && "ERROR: Appending into empty String\n");

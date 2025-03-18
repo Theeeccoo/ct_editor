@@ -14,6 +14,7 @@ typedef const struct string* const_string_tt;
 string_tt string_create(const char*);
 void string_print(const_string_tt);
 string_tt string_content_from(string_tt, int);
+void string_append_string(string_tt, char*);
 void string_append_char_at(string_tt, char, int);
 void string_delete_char_at(string_tt, int);
 void string_free(void*);
